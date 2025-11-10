@@ -4,6 +4,7 @@ import time
 import random
 import json
 from typing import Any, Optional
+import ollama
 
 try:
     from openai import OpenAI  # type: ignore
@@ -14,75 +15,73 @@ except Exception:
 class Controller:
     """Controlador simulado que usa uma LLM para detectar anomalias em fluxos de rede.
 
-    O Controller aceita um `client` já instanciado, ou tentará inicializar um cliente
-    OpenAI quando `provider='openai'` e uma `api_key` for fornecida. Se nenhum cliente
-    estiver disponível, é usado um heurístico local simples.
+    O Controller recebe um provider, que é o nome de um cliente suportado. 
+    Na implementação atual, "openai" e "ollama" são clientes válidos.
+
+    Em caso de cliente com uso de chave de API, essa deve ser passada em api_key
+
+    Para especificar o modelo, passe seu identificador em model.
+    Se não for especificado, será usado um modelo default.
     """
 
-    def __init__(self, client: Optional[Any] = None, api_key: Optional[str] = None, provider: Optional[str] = None):
-    # Usa o cliente injetado, se fornecido
-        if client is not None:
-            self.client = client
-            print("Usando cliente LLM injetado.")
-            return
+    def __init__(self, provider: Optional[str] = None, api_key: Optional[str] = None, model: Optional[str] = None):
+        self.provider = provider
+        self.model = model
 
-    # Tenta inicializar automaticamente o cliente OpenAI se solicitado
-        if provider == 'openai' and api_key and OpenAI is not None:
+        # Tenta inicializar automaticamente o cliente OpenAI se solicitado
+        if provider == 'openai':
             try:
+                if api_key is None:
+                    raise Exception("Chave de API não inserida.")
+                
+                if OpenAI is None:
+                    raise Exception("Erro ao importar biblioteca.")
+                
                 self.client = OpenAI(api_key=api_key)
-                print("Cliente OpenAI inicializado a partir de provider+api_key.")
+                print("Cliente OpenAI inicializado.")
                 return
+            
             except Exception as e:
                 print(f"Erro ao inicializar OpenAI client: {e}")
+                exit(0)
 
-    # Nenhum cliente disponível -> usar heurístico local como fallback
-        self.client = None
-        if provider and api_key:
-            print(f"Provider '{provider}' informado, mas não foi possível inicializar o client — usando simulador local.")
-        else:
-            print("Nenhum cliente LLM fornecido — usando simulador local de LLM.")
+        # Tenta inicializar automaticamente o cliente Ollama se solicitado
+        if provider == "ollama":
+            try:
+                ollama.list()
+                print("Ollama está disponível.")
+                return
+            
+            except Exception as e:
+                print(f"Erro ao se conectar com a Ollama: {e}")
+                exit(0)
+
+        print("Cliente desconhecido. Verifique os clientes válidos.")
+        exit(0)
+
 
     def call_llm_for_anomaly_detection(self, flow_data: dict) -> Optional[str]:
         """Gera o prompt a partir de `flow_data` e chama o cliente LLM configurado.
 
         Retorna uma string JSON (preferível) ou None em caso de erro.
         """
-        prompt = (
-            f"Analise os seguintes dados de fluxo de rede para detectar anomalias.\n"
-            f"Os dados de fluxo são: {flow_data}.\n"
-            "Identifique se há alguma anomalia (por exemplo, alto volume de pacotes de um único IP de origem, varredura de porta, etc.).\n"
-            "Se uma anomalia for detectada, sugira uma ação de mitigação, como 'drop' para um IP de origem específico.\n"
-            "Formato da resposta JSON esperado: {\"anomaly_detected\": boolean, \"description\": \"string\", \"action\": \"none\" | \"drop\", \"target_ip\": \"string\"}\n"
-        )
 
-    # Heurístico de fallback quando nenhum cliente está configurado
-        if self.client is None:
-            pkt_count = flow_data.get("packet_count", 0)
-            byte_count = flow_data.get("byte_count", 0)
-            src_ip = flow_data.get("src_ip", "")
-            if pkt_count > 5 or byte_count > 8000:
-                simulated = {
-                    "anomaly_detected": True,
-                    "description": f"Alto volume de tráfego do IP {src_ip}",
-                    "action": "drop",
-                    "target_ip": src_ip,
-                }
-            else:
-                simulated = {"anomaly_detected": False, "description": "Nenhuma anomalia detectada.", "action": "none"}
-            return json.dumps(simulated)
+        # tune and edit messages in prompts.json
+        with open("src/prompts.json", encoding="utf8") as file:
+            messages = json.load(file)["prompts"]
 
-    # Lógica genérica de chamada do cliente para suportar diferentes formatos de cliente LLM
         try:
-            client = self.client
-
-            # 1) Estilo OpenAI: client.chat.completions.create(...)
-            if hasattr(client, 'chat') and hasattr(getattr(client, 'chat'), 'completions'):
-                fn = client.chat.completions.create
+            # 1) Chamada OpenAI
+            if self.provider == "openai":
+                fn = self.client.chat.completions.create
                 resp = fn(
-                    model="gpt-3.5-turbo",
+                    model=self.model if self.model else "gpt-3.5-turbo",
                     messages=[
-                        {"role": "system", "content": "Você é um analista de segurança de rede especializado em detectar anomalias de tráfego."},
-                        {"role": "user", "content": prompt},
+                        {"role": messages[0]["role"], "content": messages[0]["content"]},
+                        {"role": messages[1]["role"], "content": messages[1]["content"]},
+                        {"role": "user", "content": f"{flow_data}"},
+                        {"role": messages[2]["role"], "content": messages[2]["content"]},
+                        {"role": messages[3]["role"], "content": messages[3]["content"]},
                     ],
                     response_format={"type": "json_object"},
                     temperature=0.2,
@@ -96,43 +95,42 @@ class Controller:
                     except Exception:
                         return str(resp)
 
-            # 2) Estilo Llama: client.chat.create(...) ou client.completions.create(...)
-            if hasattr(client, 'chat') and hasattr(getattr(client, 'chat'), 'create'):
-                resp = client.chat.create(model='Llama', messages=[{"role": "user", "content": prompt}])
+            # 2) Estilo Ollama
+            if self.provider == "ollama":
+                resp = ollama.chat(
+                    model=self.model if self.model else "llama3",
+                    messages=[
+                        {"role": messages[0]["role"], "content": messages[0]["content"]},
+                        {"role": messages[1]["role"], "content": messages[1]["content"]},
+                        {"role": "user", "content": f"{flow_data}"},
+                        {"role": messages[2]["role"], "content": messages[2]["content"]},
+                        {"role": messages[3]["role"], "content": messages[3]["content"]},
+                    ],
+                    options={
+                        'temperature': 0.2,
+                        }
+                    )
+                
                 if isinstance(resp, dict):
                     return json.dumps(resp)
-                return getattr(resp, 'content', str(resp))
+                print(resp["message"]["content"])
+                return resp["message"]["content"]
 
-            if hasattr(client, 'completions') and hasattr(getattr(client, 'completions'), 'create'):
-                resp = client.completions.create(model='Llama', prompt=prompt)
-                if isinstance(resp, dict):
-                    return json.dumps(resp)
-                return getattr(resp, 'text', str(resp))
-
-            # 3) Se o client for chamável (callable), chama com o prompt
-            if callable(client):
-                resp = client(prompt)
-                if isinstance(resp, dict):
-                    return json.dumps(resp)
-                return str(resp)
-
-            # 4) Métodos fallback comuns
-            if hasattr(client, 'generate'):
-                resp = client.generate(prompt)
-                if isinstance(resp, dict):
-                    return json.dumps(resp)
-                return str(resp)
-            if hasattr(client, 'predict'):
-                resp = client.predict(prompt)
-                if isinstance(resp, dict):
-                    return json.dumps(resp)
-                return str(resp)
 
             print("Formato de cliente desconhecido — não foi possível chamar o LLM.")
             return None
+        
         except Exception as e:
             print(f"Erro ao chamar o cliente LLM: {e}")
             return None
+
+    def clean_llm_formatting_mishaps(self, text: str) -> str:
+        text = text.removeprefix("```json")
+        text = text.removesuffix("```")
+        text = text.replace("\n", "")
+        text = text.strip()
+
+        return text
 
     def simulate_llm_anomaly_detection(self, flow_data: dict) -> dict:
         """Chama a LLM (real ou simulada) e normaliza a resposta para {'action': ..., 'src_ip': ...}.
@@ -142,7 +140,8 @@ class Controller:
 
         if llm_response:
             try:
-                parsed_response = json.loads(llm_response) if isinstance(llm_response, str) else llm_response
+                cleaned_response = self.clean_llm_formatting_mishaps(llm_response)
+                parsed_response = json.loads(cleaned_response) if isinstance(cleaned_response, str) else cleaned_response
                 print(f"[LLM] Resposta: {parsed_response}")
                 if parsed_response.get("anomaly_detected") and parsed_response.get("action") == "drop":
                     return {"action": "drop", "src_ip": parsed_response.get("target_ip")}
@@ -207,7 +206,11 @@ class Controller:
             time.sleep(2)
 
 
-if __name__ == "__main__":
+def main() -> None:
     api_key = os.environ.get("OPENAI_API_KEY")
-    ctrl = Controller(api_key=api_key, provider='openai')
+    # gemma3:4b is a light model from google. runs easily on a single gpu
+    ctrl = Controller(api_key=api_key, provider='ollama', model="gemma3:4b")
     ctrl.run_simulated_controller()
+
+if __name__ == "__main__":
+    main()
