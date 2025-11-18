@@ -26,7 +26,7 @@ def run_subprocess_mode(controller_path: str, duration: int):
     sim.run()
 
 
-def run_inprocess_mode(api_key: str | None, provider: str | None, duration: int):
+def run_inprocess_mode(api_key: str | None, provider: str | None, model: str | None, duration: int):
     # Carrega Controller dinamicamente a partir do arquivo src/class/controller.py
 
     controller_file = os.path.join(os.path.dirname(__file__), 'class', 'controller.py')
@@ -36,7 +36,7 @@ def run_inprocess_mode(api_key: str | None, provider: str | None, duration: int)
     Controller = getattr(module, 'Controller')
 
     def _target(a_key, prov):
-        ctrl = Controller(client=None, api_key=a_key, provider=prov)
+        ctrl = Controller(api_key=a_key, provider=prov, model=model)
         ctrl.run_simulated_controller()
 
     p = multiprocessing.Process(target=_target, args=(api_key, provider), daemon=False)
@@ -57,6 +57,7 @@ def main():
     parser.add_argument('--controller-path', type=str, default=None, help='Caminho para controller.py (apenas subprocess)')
     parser.add_argument('--provider', type=str, default=None, help='Provider LLM (ex: openai) para modo inprocess')
     parser.add_argument('--api-key', type=str, default=None, help='Chave de API para o provider')
+    parser.add_argument('--model', type=str, default=None, help='Identificador do modelo dentro da API do provedor requisitado')
 
     args = parser.parse_args()
 

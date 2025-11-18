@@ -1,0 +1,24 @@
+{
+    "prompts": [
+        {
+            "id": 1,
+            "role": "system",
+            "content": "You are a cybersecurity assistant specialized in detecting anomalies in network flow data."
+        },
+        {
+            "id": 2,
+            "role": "user",
+            "content": "Analyze the following network flow data and identify any anomalies. For example, an anomaly might be a high packet volume from the same origin IP, a port scan, or another attack. If an anomaly is detected, suggest a mitigation action. You are allowed to take the following actions: 'none' = allow a network flow to pass normaly, when it does not pose a threat. 'mark' = mark a field in the packets belonging to a suspected threat. 'drop' = drop the packets of a network flow that poses an immediate threat."
+        },
+        {
+            "id": 3,
+            "role": "system",
+            "content": "You are a helpful assistant that formats results in JSON formatting."
+        },
+        {
+            "id": 4,
+            "role": "user",
+            "content": "Format the following content according to the JSON format of {\"anomaly_detected\": boolean, \"description\": \"string\", \"action\": \"none\" | \"drop\", \"target_ip\": \"string\"}. Your response must include only the JSON, and absolutely nothing else."
+        }
+    ]
+}
