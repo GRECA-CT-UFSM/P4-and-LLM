@@ -1,0 +1,4 @@
+deepseek-r1
+llama3.3
+phi3.5
+qwen2.5-coder
